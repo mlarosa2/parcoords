@@ -79,6 +79,7 @@ d3.parcoords = function(config) {
     highlighted: [],
     dimensions: {},
     dimensionTitleRotation: 0,
+    brushes: [],
     brushed: false,
     brushedColor: null,
     alphaOnBrushed: 0.0,
@@ -118,7 +119,6 @@ d3.parcoords = function(config) {
   }
 var pc = function(selection) {
   selection = pc.selection = d3.select(selection);
-
   __.width = selection["_groups"][0][0].clientWidth;
   __.height = selection["_groups"][0][0].clientHeight;
   // canvas data layers
@@ -851,9 +851,7 @@ function path_brushed(d, i) {
 function path_foreground(d, i) {
   ctx.foreground.strokeStyle = d3.functor(__.color)(d, i);
   if (is_brushed()) {
-    ctx.foreground.canvas.style.display = "none";
-  } else {
-    ctx.foreground.canvas.style.display = "block";
+    ctx.foreground.strokeStyle = "#eee";
   }
   return color_path(d, ctx.foreground);
 };
@@ -1091,33 +1089,248 @@ pc.applyAxisConfig = function(axis, dimension) {
 
 pc.brushable = function() {
   if (!g) pc.createAxes();
+
   // Add and store a brush for each axis.
   g.append("svg:g")
     .attr("class", "brush")
     .each(function(d) {
       if (__.dimensions[d] !== undefined) {
-         __.dimensions[d]["brush"] = d3.brushY(__.dimensions[d].yscale);
-         __.dimensions[d]["brush"].extent([[0, 0], [30, d3.select('.axis').node().getBoundingClientRect().height - 10]]);
+         __.dimensions[d]["brush"] = d3.brushY(__.dimensions[d].yscale)
         d3.select(this).call(
           __.dimensions[d]["brush"]
           .on("start", function() {
-            if (d3.event.sourceEvent !== null) {
-              d3.event.sourceEvent.stopPropagation();
+            if (d3.event.sourceEvent !== null && !d3.event.sourceEvent.ctrlKey) {
               pc.brushReset();
             }
           })
           .on("brush", function () {
-            pc.brush();
+            if (!d3.event.sourceEvent.ctrlKey) {
+              pc.brush();
+            }
           })
           .on("end", function() {
-            pc.brush();
+            // save brush selection is ctrl key is held
+            // store important brush information and 
+            // the html element of the selection, 
+            // to make a dummy selection element
+            if (d3.event.sourceEvent.ctrlKey) {
+              var html = d3.select(this).select('.selection').nodes()[0].outerHTML;
+              html = html.replace('class="selection"', ('class="selection dummy' + ' selection-' + __.brushes.length + '"'));
+              var dat = d3.select(this).nodes()[0].__data__;
+              var brush = {
+                  id: __.brushes.length,
+                  extent: d3.brushSelection(this),
+                  html: html,
+                  data: dat
+                };
+              __.brushes.push(brush);
+              d3.select(
+                d3.select(this)
+                  .nodes()[0].parentNode
+                )
+                .select('.axis')
+                .nodes()[0].outerHTML += html;
+              pc.brush();
+              __.dimensions[d].brush.move(d3.select(this, null));
+              d3.select(this).select(".selection").attr("style", "display:none");
+              pc.brushable();
+            } else {
+              pc.brush();
+            }
           })
         );
+        d3.select(this)
+            .on("dblclick", function () {
+              pc.brushReset(d);
+            });
       }
-    })
+    });
 
   flags.brushable = true;
   return this;
+};
+
+pc.brush = function() {
+  __.brushed = pc.selected();
+  render.call("render");
+}
+
+pc.brushReset = function(dimension) {
+  var brushesToKeep = [];
+  for (var j = 0; j < __.brushes.length; j++) {
+    if (__.brushes[j].data !== dimension) {
+      brushesToKeep.push(__.brushes[j]);
+    }
+  }
+
+  __.brushes = brushesToKeep;
+  __.brushed = false;
+  
+  if (g) {
+    var nodes = d3.selectAll(".brush").nodes();
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].__data__ === dimension) {
+        // remove all dummy brushes for this axis or the real brush
+        d3.select(d3.select(nodes[i]).nodes()[0].parentNode).selectAll(".dummy").remove();
+        __.dimensions[dimension].brush.move(d3.select(nodes[i], null));
+      }
+    }  
+  }
+
+  return this;
+};
+
+pc.selected = function() {
+  var actives = [];
+  var extents = [];
+  var ranges = {};
+  //get brush selections from each node, convert to actual values
+  //invert order of values in array to comply with the parcoords architecture
+  if (__.brushes.length === 0) {
+    var nodes = d3.selectAll(".brush").nodes();
+    for (var k = 0; k < nodes.length; k++) {
+      if (d3.brushSelection(nodes[k]) !== null) {
+        actives.push(nodes[k].__data__);
+        var values = [];
+        var ranger = d3.brushSelection(nodes[k]);
+        if (typeof __.dimensions[nodes[k].__data__].yscale.domain()[0] === "number") {
+          for (var i = 0; i < ranger.length; i++) {
+            if (actives.includes(nodes[k].__data__) && __.flipAxes.includes(nodes[k].__data__)) {
+              values.push(__.dimensions[nodes[k].__data__].yscale.invert(ranger[i]));
+            } else if (__.dimensions[nodes[k].__data__].yscale() !== 1)  {
+              values.unshift(__.dimensions[nodes[k].__data__].yscale.invert(ranger[i]));
+            }
+          }
+          extents.push(values)
+          for (var ii = 0; ii < extents.length; ii++) {
+            if (extents[ii].length === 0) {
+              extents[ii] = [1, 1];
+            }
+          }
+        } else {
+          ranges[nodes[k].__data__] = d3.brushSelection(nodes[k]);
+          var dimRange = __.dimensions[nodes[k].__data__].yscale.range();
+          var dimDomain = __.dimensions[nodes[k].__data__].yscale.domain();
+          for (var j = 0; j < dimRange.length; j++) {
+            if ((dimRange[j] >= ranger[0] && dimRange[j] <= ranger[1]) && actives.includes(nodes[k].__data__) && __.flipAxes.includes(nodes[k].__data__)) {
+              values.push(dimRange[j]);
+            } else if (dimRange[j] >= ranger[0] && dimRange[j] <= ranger[1]) {
+              values.unshift(dimRange[j]);
+            }
+          }
+          extents.push(values);
+          for (var ii = 0; ii < extents.length; ii++) {
+            if (extents[ii].length === 0) {
+              extents[ii] = [1, 1];
+            }
+          }
+        }
+      }  
+    }
+    // test if within range
+    var within = {
+      "date": function(d,p,dimension) {
+          var category = d[p];
+          var categoryIndex = __.dimensions[p].yscale.domain().indexOf(category);
+          var categoryRangeValue = __.dimensions[p].yscale.range()[categoryIndex];
+          return categoryRangeValue >= ranges[p][0] && categoryRangeValue <= ranges[p][1];
+      },
+      "number": function(d,p,dimension) {
+        return extents[dimension][0] <= d[p] && d[p] <= extents[dimension][1];
+      },
+      "string": function(d,p,dimension) {
+        var category = d[p];
+        var categoryIndex = __.dimensions[p].yscale.domain().indexOf(category);
+        var categoryRangeValue = __.dimensions[p].yscale.range()[categoryIndex];
+        console.log(ranges, p);
+        return categoryRangeValue >= ranges[p][0] && categoryRangeValue <= ranges[p][1];
+      }
+    };
+    return __.data
+      .filter(function(d) {
+        return actives.every(function(p, dimension) {
+          return within[__.dimensions[p].type](d,p,dimension);
+        });
+      });
+  } else {
+    // need to get data from each brush instead of each axis
+    // first must find active axes by iterating through all brushes
+    // then go through similiar process as above.
+    var multiBrushData = [];
+    for (var idx = 0; idx < __.brushes.length; idx++) {
+      var brush = __.brushes[idx];
+      var values = [];
+      var ranger = brush.extent;
+      var actives = [brush.data];
+      if (typeof __.dimensions[brush.data].yscale.domain()[0] === "number") {
+        for (var i = 0; i < ranger.length; i++) {
+          if (actives.includes(brush.data) && __.flipAxes.includes(brush.data)) {
+            values.push(__.dimensions[brush.data].yscale.invert(ranger[i]));
+          } else if (__.dimensions[brush.data].yscale() !== 1)  {
+            values.unshift(__.dimensions[brush.data].yscale.invert(ranger[i]));
+          }
+        }
+        extents.push(values)
+        for (var ii = 0; ii < extents.length; ii++) {
+          if (extents[ii].length === 0) {
+            extents[ii] = [1, 1];
+          }
+        }
+      } else {
+        ranges[brush.data] = brush.extent;
+        var dimRange = __.dimensions[brush.data].yscale.range();
+        var dimDomain = __.dimensions[brush.data].yscale.domain();
+        for (var j = 0; j < dimRange.length; j++) {
+          if ((dimRange[j] >= ranger[0] && dimRange[j] <= ranger[1]) && actives.includes(brush.data) && __.flipAxes.includes(brush.data)) {
+            values.push(dimRange[j]);
+          } else if (dimRange[j] >= ranger[0] && dimRange[j] <= ranger[1]) {
+            values.unshift(dimRange[j]);
+          }
+        }
+        extents.push(values);
+        for (var ii = 0; ii < extents.length; ii++) {
+          if (extents[ii].length === 0) {
+            extents[ii] = [1, 1];
+          }
+        }
+      }
+      var within = {
+        "date": function(d,p,dimension) {
+            var category = d[p];
+            var categoryIndex = __.dimensions[p].yscale.domain().indexOf(category);
+            var categoryRangeValue = __.dimensions[p].yscale.range()[categoryIndex];
+            return categoryRangeValue >= ranges[p][0] && categoryRangeValue <= ranges[p][1];
+        },
+        "number": function(d,p,dimension) {
+          return extents[idx][0] <= d[p] && d[p] <= extents[idx][1];
+        },
+        "string": function(d,p,dimension) {
+          var category = d[p];
+          var categoryIndex = __.dimensions[p].yscale.domain().indexOf(category);
+          var categoryRangeValue = __.dimensions[p].yscale.range()[categoryIndex];
+          return categoryRangeValue >= ranges[p][0] && categoryRangeValue <= ranges[p][1];
+        }
+      };
+
+      // filter data, but instead of returning it now,
+      // put it into multiBrush data which is returned after
+      // all brushes are iterated through.
+      var filtered = __.data
+        .filter(function(d) {
+          return actives.every(function(p, dimension) {
+            return within[__.dimensions[p].type](d,p,dimension);
+          });
+        });
+      for (var z = 0; z < filtered.length; z++) {
+        multiBrushData.push(filtered[z]); 
+      }
+      actives = [];
+      ranges = {};
+    }
+    return multiBrushData;
+  }
+
+
 };
 
 // Jason Davies, http://bl.ocks.org/1341281
@@ -1263,100 +1476,6 @@ function brushPredicate(predicate) {
   __.brushed = brush.currentMode().selected();
   pc.renderBrushed();
   return pc;
-}
-
-pc.brush = function() {
-  __.brushed = pc.selected();
-  render.call("render");
-}
-
-pc.brushReset = function(dimension) {
-  __.brushed = false;
-  
-  if (g) {
-    var nodes = d3.selectAll(".brush").nodes();
-    for (var i = 0; i < nodes.length; i++) {
-      if (nodes[i].__data__ === dimension) {
-        __.dimensions[dimension].brush.move(d3.select(nodes[i], null));
-      }
-    }  
-  }
-  return this;
-};
-
-pc.selected = function() {
-  var nodes = d3.selectAll(".brush").nodes();
-  var actives = [];
-  var extents = [];
-  var ranges = {};
-  //get brush selections from each node, convert to actual values
-  //invert order of values in array to comply with the parcoords architecture
-  for (var k = 0; k < nodes.length; k++) {
-    if (d3.brushSelection(nodes[k]) !== null) {
-      actives.push(nodes[k].__data__);
-      var values = [];
-      var ranger = d3.brushSelection(nodes[k]);
-      if (typeof __.dimensions[nodes[k].__data__].yscale.domain()[0] === "number") {
-        for (var i = 0; i < ranger.length; i++) {
-            if (actives.includes(nodes[k].__data__) && __.flipAxes.includes(nodes[k].__data__)) {
-              values.push(__.dimensions[nodes[k].__data__].yscale.invert(ranger[i]));
-            } else {
-              if (__.dimensions[nodes[k].__data__].yscale() !== 1) {
-                values.unshift(__.dimensions[nodes[k].__data__].yscale.invert(ranger[i]))
-              }
-            }
-          }
-          extents.push(values)
-          for (var ii = 0; ii < extents.length; ii++) {
-            if (extents[ii].length === 0) {
-              extents[ii] = [1, 1];
-            }
-          }
-        } else {
-          ranges[nodes[k].__data__] = d3.brushSelection(nodes[k]);
-          var dimRange = __.dimensions[nodes[k].__data__].yscale.range();
-          var dimDomain = __.dimensions[nodes[k].__data__].yscale.domain();
-            for (var j = 0; j < dimRange.length; j++) {
-              if ((dimRange[j] >= ranger[0] && dimRange[j] <= ranger[1]) && actives.includes(nodes[k].__data__) && __.flipAxes.includes(nodes[k].__data__)) {
-                values.push(dimRange[j]);
-              } else if (dimRange[j] >= ranger[0] && dimRange[j] <= ranger[1]) {
-                values.unshift(dimRange[j]);
-              }
-            }
-          extents.push(values);
-          for (var ii = 0; ii < extents.length; ii++) {
-            if (extents[ii].length === 0) {
-              extents[ii] = [1, 1];
-            }
-          }
-        }
-    }
-  };
-
-  // test if within range
-  var within = {
-    "date": function(d,p,dimension) {
-        var category = d[p];
-        var categoryIndex = __.dimensions[p].yscale.domain().indexOf(category);
-        var categoryRangeValue = __.dimensions[p].yscale.range()[categoryIndex];
-        return categoryRangeValue >= ranges[p][0] && categoryRangeValue <= ranges[p][1];
-    },
-    "number": function(d,p,dimension) {
-      return extents[dimension][0] <= d[p] && d[p] <= extents[dimension][1]
-    },
-    "string": function(d,p,dimension) {
-      var category = d[p];
-      var categoryIndex = __.dimensions[p].yscale.domain().indexOf(category);
-      var categoryRangeValue = __.dimensions[p].yscale.range()[categoryIndex];
-      return categoryRangeValue >= ranges[p][0] && categoryRangeValue <= ranges[p][1];
-    }
-  };
-  return __.data
-    .filter(function(d) {
-      return actives.every(function(p, dimension) {
-        return within[__.dimensions[p].type](d,p,dimension);
-      });
-    });
 }
 
 pc.brushModes = function() {
