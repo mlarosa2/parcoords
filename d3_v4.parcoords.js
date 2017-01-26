@@ -1288,7 +1288,7 @@ pc.selected = function() {
   var nodes = d3.selectAll(".brush").nodes();
   var actives = [];
   var extents = [];
-  var ranges = {}
+  var ranges = {};
   //get brush selections from each node, convert to actual values
   //invert order of values in array to comply with the parcoords architecture
   for (var k = 0; k < nodes.length; k++) {
