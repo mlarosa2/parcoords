@@ -8,3 +8,8 @@ they put into coding this complex and useful graph.
 
 **License**
 MIT, do whatever you want with this! I just hope it helps people out!
+
+
+##Additional Features
+Holding down the ctrl button will enable multi-brush mode. This will
+allow the user to put multiple brushes on a single axis.
