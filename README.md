@@ -1,4 +1,4 @@
-#Parallel Coordinates Graph using D3 version 4
+# Parallel Coordinates Graph using D3 version 4
 
 **Disclaimer**
 This code is a modified version of Syntagmatic's [Parallel Coordinates](https://github.com/syntagmatic/parallel-coordinates).
@@ -10,6 +10,6 @@ they put into coding this complex and useful graph.
 MIT, do whatever you want with this! I just hope it helps people out!
 
 
-##Additional Features
+## Additional Features
 Holding down the ctrl button will enable multi-brush mode. This will
 allow the user to put multiple brushes on a single axis.
